@@ -4,6 +4,7 @@
 
 - Auto-starting the server for local runs (`autoStartServer`)
 - Server connection (`serverUrl`)
+- Optional ingest authentication (`ingestToken`)
 - Run naming (`runName`, optional `runId`)
 - Run metadata (`metadata`)
 - Target Run context (`target`, `purpose`, `sources`, optional `parentRunId`)
@@ -35,6 +36,16 @@ runName: CI run ${env:GITHUB_RUN_NUMBER}
 Base URL to the TestRift server (used for WebSocket + HTTP).
 
 Example: `http://localhost:8080`
+
+#### `ingestToken` (optional)
+
+Shared secret sent as `X-TestRift-Ingest-Token` with the NUnit WebSocket connection and HTTP uploads such as KPIs and attachments. Prefer an environment variable instead of storing the token in YAML:
+
+```yaml
+ingestToken: ${env:TESTRIFT_INGEST_TOKEN}
+```
+
+The server must be configured with the same `auth.ingest_token`. HTTPS is required when the server's ingest TLS mode is enabled.
 
 #### `autoStartServer` (optional)
 

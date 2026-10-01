@@ -73,6 +73,12 @@ namespace TestRift.NUnit
         public string ServerUrl { get; set; }
 
         /// <summary>
+        /// Optional token used for HTTP ingest endpoints.
+        /// Supports environment variable expansion with ${env:VAR_NAME} syntax.
+        /// </summary>
+        public string IngestToken { get; set; }
+
+        /// <summary>
         /// Human-readable name for this test run, displayed in the UI instead of the run_id.
         /// Supports environment variable expansion with ${env:VAR_NAME} syntax.
         /// </summary>
@@ -151,6 +157,9 @@ namespace TestRift.NUnit
                 // Expand server URL
                 if (!string.IsNullOrEmpty(cfg.ServerUrl))
                     cfg.ServerUrl = VarExpander.Expand(cfg.ServerUrl);
+
+                if (!string.IsNullOrEmpty(cfg.IngestToken))
+                    cfg.IngestToken = VarExpander.Expand(cfg.IngestToken);
 
                 // Expand auto-start server YAML path (if configured)
                 if (cfg.AutoStartServer != null && !string.IsNullOrEmpty(cfg.AutoStartServer.ServerYaml))
