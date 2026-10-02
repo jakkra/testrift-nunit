@@ -155,9 +155,11 @@ namespace TestRift.NUnit
                     cfg.RunName = VarExpander.Expand(cfg.RunName);
 
                 // Expand server URL
+                cfg.ServerUrl = Environment.GetEnvironmentVariable("TESTRIFT_SERVER_URL") ?? cfg.ServerUrl;
                 if (!string.IsNullOrEmpty(cfg.ServerUrl))
                     cfg.ServerUrl = VarExpander.Expand(cfg.ServerUrl);
 
+                cfg.IngestToken = Environment.GetEnvironmentVariable("TESTRIFT_INGEST_TOKEN") ?? cfg.IngestToken;
                 if (!string.IsNullOrEmpty(cfg.IngestToken))
                     cfg.IngestToken = VarExpander.Expand(cfg.IngestToken);
 

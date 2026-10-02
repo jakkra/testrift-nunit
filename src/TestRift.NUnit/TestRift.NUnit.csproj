@@ -9,7 +9,7 @@
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <IsPackable>true</IsPackable>
     <PackageId>TestRift.NUnit</PackageId>
-    <Version>0.7.2</Version>
+    <Version>0.8.0</Version>
     <Authors>Andreas Anderberg</Authors>
     <Description>TestRift real-time logging and test run metadata plugin for NUnit.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
@@ -29,7 +29,7 @@
 
   <ItemGroup>
     <PackageReference Include="NUnit" Version="[3.7.0,4.0.0)" />
-    <PackageReference Include="MessagePack" Version="[2.5.0,3.0.0)" />
+    <PackageReference Include="MessagePack" Version="[2.5.301,3.0.0)" />
     <PackageReference Include="YamlDotNet" Version="[13.0.0,16.0.0)" />
   </ItemGroup>
 

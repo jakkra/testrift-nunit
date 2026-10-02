@@ -145,6 +145,22 @@ namespace TestRift.NUnit
         private const int MaxEventsPerBatch = 500;      // Maximum events per batch message
         private const int HeartbeatIntervalMs = 10000;  // Send heartbeat every 10 seconds if no activity
         private const long MaxKpiUploadBytes = 10 * 1024 * 1024;
+        private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan SendTimeout = TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan CloseTimeout = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan HttpUploadTimeout = TimeSpan.FromSeconds(60);
+
+        private long _droppedEventCount;
+        private volatile string _kpiUploadFailure;
+
+        /// <summary>Events that could not be delivered because sending failed or the connection was lost.</summary>
+        public long DroppedEventCount => Interlocked.Read(ref _droppedEventCount);
+
+        /// <summary>Reason the KPI upload failed, or null when it succeeded or was not needed.</summary>
+        public string KpiUploadFailure => _kpiUploadFailure;
+
+        /// <summary>True when the server accepted run_started and issued a run ID.</summary>
+        public bool IsRunActive => !string.IsNullOrEmpty(_runId);
 
         private readonly string _serverBaseUrl;
         private string _runId;  // Set by server response after run_started
@@ -243,7 +259,7 @@ namespace TestRift.NUnit
             // Initialize metrics timer (sends every 5 seconds to batch samples)
             _metricsTimer = new Timer(OnMetricsTimerTick, null, Timeout.Infinite, Timeout.Infinite);
 
-            _httpClient = new HttpClient();
+            _httpClient = new HttpClient { Timeout = HttpUploadTimeout };
             _ingestToken = GetConfiguredIngestToken();
             if (!string.IsNullOrWhiteSpace(_ingestToken))
                 _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("x-testrift-ingest-token", _ingestToken);
@@ -303,7 +319,10 @@ namespace TestRift.NUnit
                 if (!string.IsNullOrWhiteSpace(_ingestToken))
                     _webSocket.Options.SetRequestHeader("x-testrift-ingest-token", _ingestToken);
                 var uri = new Uri(_serverBaseUrl.Replace("http://", "ws://").Replace("https://", "wss://") + "/ws/nunit");
-                await _webSocket.ConnectAsync(uri, CancellationToken.None);
+                using (var timeout = new CancellationTokenSource(ConnectTimeout))
+                {
+                    await _webSocket.ConnectAsync(uri, timeout.Token);
+                }
 
                 ThreadSafeFileLogger.LogWebSocketConnected(uri.ToString());
                 ThreadSafeFileLogger.LogWebSocketStateDetails("Post-connect", _webSocket.State, _webSocket.CloseStatus, _webSocket.CloseStatusDescription);
@@ -480,7 +499,10 @@ namespace TestRift.NUnit
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
                         ThreadSafeFileLogger.LogWebSocketConnectionFailed($"Server closed WebSocket: {result.CloseStatus} {result.CloseStatusDescription}");
-                        await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                        using (var closeTimeout = new CancellationTokenSource(CloseTimeout))
+                        {
+                            await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", closeTimeout.Token);
+                        }
                         break;
                     }
 
@@ -625,8 +647,7 @@ namespace TestRift.NUnit
             StopMetricsCollection();
             await FlushMetricsAsync();
 
-            // Flush all pending events before finishing
-            await FlushBatchAsync();
+            await FlushAllMessagesAsync();
 
             await UploadKpiFileAsync();
 
@@ -666,16 +687,13 @@ namespace TestRift.NUnit
                 }
                 if (fileInfo.Length > MaxKpiUploadBytes)
                 {
-                    ThreadSafeFileLogger.LogWebSocketConnectionFailed(
-                        $"KPI upload skipped: kpi.json exceeds {MaxKpiUploadBytes} bytes");
+                    RecordKpiUploadFailure($"kpi.json exceeds {MaxKpiUploadBytes} bytes");
                     return;
                 }
 
                 if (!_kpiFileStateCaptured)
                 {
-                    ThreadSafeFileLogger.LogWebSocketConnectionFailed(
-                        "KPI upload skipped: file freshness could not be verified"
-                    );
+                    RecordKpiUploadFailure("file freshness could not be verified");
                     return;
                 }
 
@@ -693,7 +711,7 @@ namespace TestRift.NUnit
             }
             catch (Exception ex)
             {
-                ThreadSafeFileLogger.LogWebSocketConnectionFailed($"KPI upload inspection failed: {ex.Message}");
+                RecordKpiUploadFailure($"inspection failed: {ex.Message}");
                 return;
             }
 
@@ -723,16 +741,15 @@ namespace TestRift.NUnit
 
                             var statusCode = (int)response.StatusCode;
                             var transient = statusCode == 408 || statusCode == 429 || statusCode >= 500;
-                            ThreadSafeFileLogger.LogWebSocketConnectionFailed(
-                                $"KPI upload failed for run {_runId}: HTTP {statusCode} (attempt {attempt}/2)");
+                            var detail = await ReadErrorDetailAsync(response);
+                            RecordKpiUploadFailure($"HTTP {statusCode}{detail} (attempt {attempt}/2)");
                             if (!transient) return;
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    ThreadSafeFileLogger.LogWebSocketConnectionFailed(
-                        $"KPI upload error for run {_runId} (attempt {attempt}/2): {ex.Message}");
+                    RecordKpiUploadFailure($"{ex.Message} (attempt {attempt}/2)");
                 }
 
                 if (attempt < 2)
@@ -1174,7 +1191,7 @@ namespace TestRift.NUnit
                 var logBatches = new Dictionary<string, List<LogEntry>>();
 
                 int count = 0;
-                while (_eventQueue.TryDequeue(out var evt) && count < MaxEventsPerBatch)
+                while (count < MaxEventsPerBatch && _eventQueue.TryDequeue(out var evt))
                 {
                     count++;
 
@@ -1244,8 +1261,10 @@ namespace TestRift.NUnit
                     { Protocol.F_EVENTS, events }
                 };
 
-                await SendWebSocketMessageDirect(batchMessage);
-                _lastSendTime = DateTime.UtcNow;
+                if (await SendWebSocketMessageDirect(batchMessage))
+                    _lastSendTime = DateTime.UtcNow;
+                else
+                    Interlocked.Add(ref _droppedEventCount, count);
             }
             finally
             {
@@ -1281,7 +1300,7 @@ namespace TestRift.NUnit
             }
         }
 
-        private async Task SendWebSocketMessageDirect(object data)
+        private async Task<bool> SendWebSocketMessageDirect(object data)
         {
             var messageType = GetMessageType(data);
             var messageId = Interlocked.Increment(ref _messageSequence);
@@ -1291,7 +1310,7 @@ namespace TestRift.NUnit
                 var stateSnapshot = DescribeSocketState();
                 ThreadSafeFileLogger.LogWebSocketNotOpen(stateSnapshot);
                 ThreadSafeFileLogger.LogSendFailed($"Send[{messageId}] skipped (type={messageType})");
-                return;
+                return false;
             }
 
             byte[] bytes;
@@ -1302,35 +1321,38 @@ namespace TestRift.NUnit
             catch (Exception ex)
             {
                 ThreadSafeFileLogger.LogWebSocketException($"Serialize message {messageId} ({messageType})", ex);
-                return;
+                return false;
             }
 
             ThreadSafeFileLogger.LogSendStarting(messageId, messageType, DescribeSocketState());
 
             try
             {
-                if (_webSocket?.State != WebSocketState.Open)
+                // A timed-out send aborts the socket, so later sends fail fast instead of blocking tests.
+                using (var timeout = new CancellationTokenSource(SendTimeout))
                 {
-                    ThreadSafeFileLogger.LogWebSocketNotOpen(DescribeSocketState());
-                    return;
+                    await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Binary, true, timeout.Token);
                 }
-
-                await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Binary, true, CancellationToken.None);
                 ThreadSafeFileLogger.LogSendCompleted(messageId, messageType, bytes.Length);
+                return true;
             }
             catch (Exception ex)
             {
                 ThreadSafeFileLogger.LogSendFailed(ex.Message);
                 ThreadSafeFileLogger.LogWebSocketException($"Send[{messageId}] ({messageType})", ex);
+                return false;
             }
         }
 
         /// <summary>
-        /// Flushes all pending messages and waits for completion.
+        /// Flushes every queued event, sending as many batches as needed.
         /// </summary>
         public async Task FlushAllMessagesAsync()
         {
-            await FlushBatchAsync();
+            while (!_eventQueue.IsEmpty && !string.IsNullOrEmpty(_runId))
+            {
+                await FlushBatchAsync();
+            }
         }
 
         /// <summary>
@@ -1338,7 +1360,7 @@ namespace TestRift.NUnit
         /// </summary>
         public void FlushAllMessages()
         {
-            FlushBatchAsync().Wait();
+            FlushAllMessagesAsync().Wait();
         }
 
         /// <summary>
@@ -1346,7 +1368,28 @@ namespace TestRift.NUnit
         /// </summary>
         public async Task WaitForFlushCompleteAsync()
         {
-            await FlushBatchAsync();
+            await FlushAllMessagesAsync();
+        }
+
+        private void RecordKpiUploadFailure(string reason)
+        {
+            _kpiUploadFailure = reason;
+            ThreadSafeFileLogger.LogWebSocketConnectionFailed($"KPI upload failed for run {_runId}: {reason}");
+        }
+
+        private static async Task<string> ReadErrorDetailAsync(HttpResponseMessage response)
+        {
+            try
+            {
+                var body = await response.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(body)) return "";
+                body = body.Trim();
+                return ": " + (body.Length > 300 ? body.Substring(0, 300) : body);
+            }
+            catch
+            {
+                return "";
+            }
         }
 
         /// <summary>
@@ -1450,7 +1493,7 @@ namespace TestRift.NUnit
                 try
                 {
                     ThreadSafeFileLogger.Log("Initiating graceful WebSocket close");
-                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    using var cts = new CancellationTokenSource(CloseTimeout);
                     await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Run finished", cts.Token);
                     ThreadSafeFileLogger.Log("WebSocket closed gracefully");
                 }
@@ -1484,8 +1527,11 @@ namespace TestRift.NUnit
                         try
                         {
                             ThreadSafeFileLogger.Log("Attempting graceful close during Dispose");
-                            _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Disposing", CancellationToken.None)
-                                .GetAwaiter().GetResult();
+                            using (var closeTimeout = new CancellationTokenSource(CloseTimeout))
+                            {
+                                _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Disposing", closeTimeout.Token)
+                                    .GetAwaiter().GetResult();
+                            }
                         }
                         catch (Exception ex)
                         {

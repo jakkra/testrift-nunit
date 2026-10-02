@@ -175,38 +175,66 @@ namespace TestRift.NUnit
         public ActionTargets Targets => ActionTargets.Test;
 
         // Static methods called by RunHooks
+        private static string _disabledReason;
+
+        /// <summary>
+        /// Disables reporting for this run; tests still run. Called when configuration cannot be loaded.
+        /// </summary>
+        public static void DisableReporting(string reason)
+        {
+            lock (_runLock)
+            {
+                _disabledReason = reason;
+            }
+            WarnReportingProblem($"TestRift reporting disabled: {reason}");
+        }
+
         public static void NotifyRunStarted()
         {
             lock (_runLock)
             {
-                if (!_runStarted)
+                if (_runStarted || _disabledReason != null)
+                    return;
+
+                _runStarted = true;
+                var helper = new WebSocketHelper();
+                try
                 {
-                    _runStarted = true;
-                    _sharedWebSocketHelper = new WebSocketHelper();
-                    try
-                    {
-                        _sharedWebSocketHelper.ConnectAsync().Wait();
-                        // SendRunStarted now waits for server response with run_id and writes URL files
-                        // If server returns an error (e.g., invalid run_id), this will throw and abort the test run
-                        _sharedWebSocketHelper.SendRunStarted().Wait();
-                    }
-                    catch (AggregateException aggEx)
-                    {
-                        // Unwrap AggregateException to get the original exception
-                        // This allows NUnit to properly abort the test run with a clear error message
-                        var innerEx = aggEx.InnerException ?? aggEx;
-                        ThreadSafeFileLogger.LogWebSocketConnectionFailed($"Failed to start test run: {innerEx.Message}");
-                        throw innerEx;
-                    }
-
-                    ThreadSafeFileLogger.LogRunStarted();
-
-                    // Create LogTextWriter once per run (shared across all test instances)
-                    // This hooks Console.SetOut globally for the entire test run
-                    _originalConsole = Console.Out;
-                    _logWriter = new LogTextWriter(_sharedWebSocketHelper);
-                    Console.SetOut(_logWriter);
+                    helper.ConnectAsync().GetAwaiter().GetResult();
+                    // SendRunStarted waits for the server's run_id and writes URL files
+                    helper.SendRunStarted().GetAwaiter().GetResult();
                 }
+                catch (Exception ex)
+                {
+                    helper.Dispose();
+                    _runStarted = false;
+                    ThreadSafeFileLogger.LogWebSocketConnectionFailed($"Failed to start test run: {ex.Message}");
+                    _disabledReason = ex.Message;
+                    WarnReportingProblem($"TestRift reporting disabled, tests continue without it: {ex.Message}");
+                    return;
+                }
+
+                _sharedWebSocketHelper = helper;
+                ThreadSafeFileLogger.LogRunStarted();
+
+                // Create LogTextWriter once per run (shared across all test instances)
+                // This hooks Console.SetOut globally for the entire test run
+                _originalConsole = Console.Out;
+                _logWriter = new LogTextWriter(_sharedWebSocketHelper);
+                Console.SetOut(_logWriter);
+            }
+        }
+
+        private static void WarnReportingProblem(string message)
+        {
+            ThreadSafeFileLogger.Log(message);
+            try
+            {
+                TestContext.Progress.WriteLine($"WARNING: {message}");
+            }
+            catch
+            {
+                // Progress is unavailable outside an NUnit run.
             }
         }
 
@@ -214,6 +242,7 @@ namespace TestRift.NUnit
         {
             lock (_runLock)
             {
+                _disabledReason = null;
                 if (_runStarted && _sharedWebSocketHelper != null)
                 {
                     ThreadSafeFileLogger.LogRunFinished();
@@ -235,9 +264,15 @@ namespace TestRift.NUnit
                     catch (Exception ex)
                     {
                         ThreadSafeFileLogger.LogWebSocketConnectionFailed($"Error sending run finished message: {ex.Message}");
+                        WarnReportingProblem($"TestRift could not finish the run report: {ex.Message}");
                     }
                     finally
                     {
+                        if (_sharedWebSocketHelper.DroppedEventCount > 0)
+                            WarnReportingProblem(
+                                $"TestRift lost {_sharedWebSocketHelper.DroppedEventCount} events after the connection failed; the report is incomplete.");
+                        if (_sharedWebSocketHelper.KpiUploadFailure != null)
+                            WarnReportingProblem($"TestRift KPI upload failed: {_sharedWebSocketHelper.KpiUploadFailure}");
                         // Restore original console writer and dispose log writer
                         if (_logWriter != null)
                         {

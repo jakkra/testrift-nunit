@@ -35,15 +35,23 @@ namespace TestRift.NUnit
 
             if (!string.IsNullOrEmpty(finalConfigPath))
             {
-                ConfigManager.Load(finalConfigPath);
-                Console.WriteLine($"Loaded TestRift NUnit config: {finalConfigPath}");
-
-                // Optional: auto-start TestRift Server for local dev/CI convenience.
-                var cfg = ConfigManager.Get();
-                var auto = cfg.AutoStartServer;
-                if (auto != null && auto.Enabled)
+                try
                 {
-                    ServerAutoStarter.EnsureServerRunning(cfg.ServerUrl, auto.ServerYaml, auto.RestartOnConfigChange);
+                    ConfigManager.Load(finalConfigPath);
+                    Console.WriteLine($"Loaded TestRift NUnit config: {finalConfigPath}");
+
+                    // Optional: auto-start TestRift Server for local dev/CI convenience.
+                    var cfg = ConfigManager.Get();
+                    var auto = cfg.AutoStartServer;
+                    if (auto != null && auto.Enabled)
+                    {
+                        ServerAutoStarter.EnsureServerRunning(cfg.ServerUrl, auto.ServerYaml, auto.RestartOnConfigChange);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Reporting problems must not prevent the tests themselves from running.
+                    TRLoggerAttribute.DisableReporting($"cannot load {finalConfigPath}: {ex.Message}");
                 }
             }
         }

@@ -21,7 +21,7 @@ If no config file is found, the plugin uses defaults (server URL defaults to `ht
 
 ### Environment variable expansion
 
-All string fields support `${env:VAR_NAME}` expansion. A referenced variable must be set; missing variables fail configuration loading.
+All string fields support `${env:VAR_NAME}` expansion. A referenced variable must be set; missing variables fail configuration loading, which disables reporting for the run (see below).
 
 Example:
 
@@ -29,21 +29,23 @@ Example:
 runName: CI run ${env:GITHUB_RUN_NUMBER}
 ```
 
+### When the server is unavailable
+
+Reporting never blocks the tests. If the config cannot be loaded, the server cannot be reached within 10 seconds, or the server rejects `run_started`, the tests run without reporting and a `WARNING:` line is printed to the NUnit progress output. Sends and closes are bounded by timeouts, so a server that stops responding mid-run cannot stall the tests.
+
+At the end of the run, a warning reports how many events were lost if the connection dropped, and whether the KPI upload failed. Lost events are not replayed; the server marks such runs as aborted.
+
 ### Schema
 
 #### `serverUrl` (optional)
 
-Base URL to the TestRift server (used for WebSocket + HTTP).
+Base URL to the TestRift server (used for WebSocket + HTTP). The `TESTRIFT_SERVER_URL` environment variable overrides this value.
 
 Example: `http://localhost:8080`
 
 #### `ingestToken` (optional)
 
-Shared secret sent as `X-TestRift-Ingest-Token` with the NUnit WebSocket connection and HTTP uploads such as KPIs and attachments. Prefer an environment variable instead of storing the token in YAML:
-
-```yaml
-ingestToken: ${env:TESTRIFT_INGEST_TOKEN}
-```
+Shared secret sent as `X-TestRift-Ingest-Token` with the NUnit WebSocket connection and HTTP uploads such as KPIs and attachments. Prefer setting the `TESTRIFT_INGEST_TOKEN` environment variable, which overrides this value, instead of storing the token in YAML.
 
 The server must be configured with the same `auth.ingest_token`. HTTPS is required when the server's ingest TLS mode is enabled.
 
