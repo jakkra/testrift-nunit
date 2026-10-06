@@ -43,13 +43,13 @@ jobs:
       run: dotnet build --no-restore --configuration Release
 
     - name: Test with minimum versions
-      run: dotnet test tests/TestRift.NUnit.Tests/TestRift.NUnit.Tests.csproj --configuration Release --verbosity normal --logger "console;verbosity=detailed" /p:LocalTestRiftServerFeed="${{ env.LocalTestRiftServerFeed }}"
+      run: dotnet test tests/TestRift.NUnit.Tests/TestRift.NUnit.Tests.csproj --configuration Release --verbosity normal --logger "console;verbosity=detailed" /p:LocalTestRiftServerFeed="${{ env.LocalTestRiftServerFeed }}" -- NUnit.DiscoveryMethod=Legacy
 
     - name: Test with maximum versions
-      run: dotnet test tests/TestRift.NUnit.Tests.MaxVersions/TestRift.NUnit.Tests.MaxVersions.csproj --configuration Release --verbosity normal --logger "console;verbosity=detailed" /p:LocalTestRiftServerFeed="${{ env.LocalTestRiftServerFeed }}"
+      run: dotnet test tests/TestRift.NUnit.Tests.MaxVersions/TestRift.NUnit.Tests.MaxVersions.csproj --configuration Release --verbosity normal --logger "console;verbosity=detailed" /p:LocalTestRiftServerFeed="${{ env.LocalTestRiftServerFeed }}" -- NUnit.DiscoveryMethod=Legacy
 
     - name: Integration tests
-      run: dotnet test tests/TestRift.NUnit.Integration.Tests/TestRift.NUnit.Integration.Tests.csproj --configuration Release --verbosity normal --logger "console;verbosity=detailed" /p:LocalTestRiftServerFeed="${{ env.LocalTestRiftServerFeed }}"
+      run: dotnet test tests/TestRift.NUnit.Integration.Tests/TestRift.NUnit.Integration.Tests.csproj --configuration Release --verbosity normal --logger "console;verbosity=detailed" /p:LocalTestRiftServerFeed="${{ env.LocalTestRiftServerFeed }}" -- NUnit.DiscoveryMethod=Legacy
 
   test-netframework:
     name: Test on .NET Framework 4.6.2 (Windows)

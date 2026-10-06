@@ -51,7 +51,9 @@ The config is discovered from either:
 - `TESTRIFT_NUNIT_YAML` (filesystem path), or
 - `./TestRiftNUnit.yaml` in the current working directory.
 
-All string fields support `${env:VAR_NAME}` expansion (missing variables expand to an empty string), which is useful in CI.
+All string fields support `${env:VAR_NAME}` expansion. Referenced variables must be set; a missing variable disables reporting for the run without failing the tests.
+
+`TESTRIFT_SERVER_URL` and `TESTRIFT_INGEST_TOKEN` override the YAML server URL and ingest token. The token is sent as `X-TestRift-Ingest-Token` on WebSocket connections and HTTP uploads. See [configuration](docs/config.md) for reporting failure behavior and timeouts.
 
 Example `TestRiftNUnit.yaml`:
 

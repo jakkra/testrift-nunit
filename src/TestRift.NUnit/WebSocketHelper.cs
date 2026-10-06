@@ -259,7 +259,11 @@ namespace TestRift.NUnit
             // Initialize metrics timer (sends every 5 seconds to batch samples)
             _metricsTimer = new Timer(OnMetricsTimerTick, null, Timeout.Infinite, Timeout.Infinite);
 
-            _httpClient = new HttpClient { Timeout = HttpUploadTimeout };
+            _httpClient = new HttpClient
+            {
+                Timeout = HttpUploadTimeout,
+                MaxResponseContentBufferSize = 64 * 1024
+            };
             _ingestToken = GetConfiguredIngestToken();
             if (!string.IsNullOrWhiteSpace(_ingestToken))
                 _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("x-testrift-ingest-token", _ingestToken);
@@ -306,7 +310,7 @@ namespace TestRift.NUnit
             using (var stream = File.OpenRead(filePath))
             using (var sha256 = SHA256.Create())
             {
-                return Convert.ToBase64String(sha256.ComputeHash(stream));
+                return $"{fileInfo.LastWriteTimeUtc.Ticks}:{Convert.ToBase64String(sha256.ComputeHash(stream))}";
             }
         }
 
@@ -730,11 +734,12 @@ namespace TestRift.NUnit
 
                         using (var response = await _httpClient.SendAsync(
                             request,
-                            HttpCompletionOption.ResponseHeadersRead,
+                            HttpCompletionOption.ResponseContentRead,
                             timeout.Token))
                         {
                             if (response.IsSuccessStatusCode)
                             {
+                                _kpiUploadFailure = null;
                                 ThreadSafeFileLogger.LogMessageSent($"Uploaded KPI file for run {_runId}");
                                 return;
                             }

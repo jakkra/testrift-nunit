@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 [assembly: InternalsVisibleTo("TestRift.NUnit.Tests")]
+[assembly: InternalsVisibleTo("TestRift.NUnit.Tests.MaxVersions")]
 
 namespace TestRift.NUnit
 {

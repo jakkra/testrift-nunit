@@ -35,6 +35,12 @@ Reporting never blocks the tests. If the config cannot be loaded, the server can
 
 At the end of the run, a warning reports how many events were lost if the connection dropped, and whether the KPI upload failed. Lost events are not replayed; the server marks such runs as aborted.
 
+### KPI uploads
+
+At run completion, the plugin uploads `kpi.json` from the test output directory to the current run. A file left untouched since run start is skipped. Both the content hash and modification time are checked, so a rewritten file can be uploaded even when its values are identical to the previous run.
+
+Files must be nonempty and at most 10 MiB. Each upload attempt, including reading the response body, has a 10-second timeout. HTTP response buffering is limited to 64 KiB. Network failures and HTTP 408, 429, or 5xx responses get one retry after 250 ms. Other HTTP errors are not retried. A successful retry clears the upload-failure warning.
+
 ### Schema
 
 #### `serverUrl` (optional)
